@@ -29,7 +29,7 @@ from logging import getLogger
 import json
 import math
 from enum import Enum
-
+os.system('clear')
 logger = getLogger(__name__)
 
 # The following constants remain unchanged
@@ -43,7 +43,13 @@ LN_2 = 0.69314718056  # ln(2) = 1.0 / LOG2_E
 MODEL_ID = 'HuggingFaceTB/SmolLM-135M-Instruct' #No need for tokens as Smollm is not gated!
 
 
-
+def printc(obj, color="cyan"):
+    color_code = {
+        "black": "30", "red": "31", "green": "32", "yellow": "33",
+        "blue": "34", "magenta": "35", "cyan": "36", "white": "37"
+    }
+    colored_text = f"\033[{color_code[color]}m{obj}\033[0m" if color in color_code else obj
+    print(colored_text)
 
 if torch.backends.mps.is_available():
     device = torch.device("mps")
@@ -1107,7 +1113,7 @@ class EntropixModel:
                 gen_tokens = torch.cat((gen_tokens.to(device), next_token.to(device)), dim=1)
                 output += self.tokenizer.decode(next_token.tolist()[0])
                 if next_token.item() == torch.tensor([999999], device=device, dtype=torch.int32):
-                    print(status)
+                    printc(status, "yellow")
                     if summarise:
                       status = 'generating'
                     else:
@@ -1215,28 +1221,31 @@ def initialize_model():
     print("Model initialized and ready to use!")
 
 def generate_text(prompt):
+    printc(prompt, "green")
     if 'entropix_model' not in globals():
         print("Model not initialized. Please run initialize_model() first.")
         return
-
+    resp = "\nSystem: "+prompt+"\n"
+    
     while True:
         response, status = entropix_model.generate(prompt, debug=False, summarise=False)
-
+        printc((response, status))
+        resp+="\nAgent: "+response+"\n"
         if status == 'summarise':
 
-            print("\nSummarizing current thoughts...")
-            print(response)
+ 
             summary_prompt = f"Give a brief summary of this text:\n{response}"
+            resp+="\System: "+summary_prompt+"\n"
             summary, _ = entropix_model.generate(summary_prompt, debug=False, summarise=True)
+            resp+="\nAgent: "+summary+"\n"
 
-            print("\nContinuing reasoning based on summary...")
             prompt = f"{prompt}\n\nBased on this summary below, continue the reasoning:\n{summary}"
         elif status == 'done':
             break
         else:
             break
 
-    return
+    return resp
 
 
 
@@ -1244,18 +1253,79 @@ torch.cuda.empty_cache()
 
 initialize_model()
 
+
+
+
+
+from openai import OpenAI
+import json
+
+
+def evaluate_state(agent_state:str,question:str, goal_state:str, model="gpt-4o-mini", base_url:str=None):
+    client = OpenAI() if base_url is None else OpenAI(base_url=base_url)
+    score = 0
+    response = client.chat.completions.create(
+        model=model,
+        max_tokens=120,
+        messages=[
+            {
+                "role": "system",
+                "content": "You are a helpful AI assistant that helps evaluate an agent at problem solving. Given a question and a goal state, evaluate the agent's current state",
+            },
+            {
+                "role": "user",
+                "content": str(
+                    "QUESTION/START STATE:"
+                    + question
+                    + "\nAGENT CURRENT STATE: "
+                    + agent_state
+                    + "\n:CORRECT GOAL STATE: "
+                    + goal_state
+                ),
+            },
+        ],
+        functions=[
+            {
+                "name": "evaluate_state",
+                "description": "Evaluates the agent's answer compared to the answer key",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "score": {
+                            "type": "integer",
+                            "description": "the score of the agent's answer",
+                        },
+                        "feedback": {
+                            "type": "string",
+                            "description": "in a few short words, provide feedback to the agent on their answer",
+                        },
+
+                    },
+                },
+            }
+        ],
+    )
+
+    
+    data = json.loads(response.choices[0].message.function_call.arguments)
+    
+
+    return {'reward': data.get("score"), 'feedback': data.get("feedback","No feedback")}
+
+
+
+
+
+
 #some examples
-generate_text("which one is larger 9.9 or 9.11?")
+
+examples = json.load(open("example_data.json","r"))
 
 
-generate_text("Tell me a short story about a robot learning to paint.")
+val = generate_text(examples[0]["start_state"])
+print(val)
 
 
-generate_text("What is the capital city of Spain?")
 
-
-generate_text("Thomas has 4 elder sisters, James has 2 elder sisters and 1 younger sister. Thomas and James share the same father and mother. What's the relationship between Thomas and James?")
-
-generate_text("which one is larger 9.9 or 9.11?")
-
-
+grade = evaluate_state(val,examples[0]["start_state"],examples[0]["solution"])
+print(grade)
