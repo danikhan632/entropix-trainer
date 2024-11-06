@@ -22,7 +22,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from pathlib import Path
-from transformers import AutoModelForCausalLM, PreTrainedTokenizerFast
+from transformers import AutoModelForCausalLM, PreTrainedTokenizerFast, AutoConfig
 from unittest.mock import patch
 from transformers.dynamic_module_utils import get_imports
 from logging import getLogger
@@ -39,9 +39,8 @@ MAX_NO_WHITESPACES_CHARS = 25_000
 DEFAULT_MASK_VALUE = -0.7 * float(torch.finfo(torch.float32).max)
 
 LN_2 = 0.69314718056  # ln(2) = 1.0 / LOG2_E
-
-MODEL_ID = 'HuggingFaceTB/SmolLM-135M-Instruct' #No need for tokens as Smollm is not gated!
-
+MODEL_ID = 'TinyLlama/TinyLlama-1.1B-Chat-v1.0'
+config = AutoConfig.from_pretrained(MODEL_ID)
 
 def printc(obj, color="cyan"):
     color_code = {
@@ -57,6 +56,8 @@ elif torch.cuda.is_available():
     device = torch.device("cuda")
 else:
     device = torch.device("cpu")
+    
+
 print(f"Using device: {device}")
 
 
@@ -65,17 +66,22 @@ os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 torch.cuda.empty_cache()
 torch.set_float32_matmul_precision('high')
 
+config = AutoConfig.from_pretrained(MODEL_ID)
+
+print(config)
 params = {
-    "dim": 576,
-    "n_layers": 30,
-    "n_heads": 9,
-    "n_kv_heads": 3,
-    "vocab_size": 49152,
-    "norm_eps": 1e-05,
-    "rope_theta": 10000.0,
+    "dim": config.hidden_size,
+    "n_layers": config.num_hidden_layers,
+    "n_heads": config.num_attention_heads,
+    "n_kv_heads": config.num_key_value_heads,
+    "vocab_size": config.vocab_size,
+    "norm_eps": config.rms_norm_eps,
+    "rope_theta": config.rope_theta,
     "use_scaled_rope": False,  # Inferred from "rope_scaling": null
-    "max_seq_len": 2048,  # Inferred from "max_position_embeddings"
+    "max_seq_len": config.max_position_embeddings,  # Inferred from "max_position_embeddings"
 }
+
+print(params)
 
 class ModelParams(NamedTuple):
   n_layers: int
@@ -1257,65 +1263,6 @@ initialize_model()
 
 
 
-from openai import OpenAI
-import json
-
-
-def evaluate_state(agent_state:str,question:str, goal_state:str, model="gpt-4o-mini", base_url:str=None):
-    client = OpenAI() if base_url is None else OpenAI(base_url=base_url)
-    score = 0
-    response = client.chat.completions.create(
-        model=model,
-        max_tokens=120,
-        messages=[
-            {
-                "role": "system",
-                "content": "You are a helpful AI assistant that helps evaluate an agent at problem solving. Given a question and a goal state, evaluate the agent's current state",
-            },
-            {
-                "role": "user",
-                "content": str(
-                    "QUESTION/START STATE:"
-                    + question
-                    + "\nAGENT CURRENT STATE: "
-                    + agent_state
-                    + "\n:CORRECT GOAL STATE: "
-                    + goal_state
-                ),
-            },
-        ],
-        functions=[
-            {
-                "name": "evaluate_state",
-                "description": "Evaluates the agent's answer compared to the answer key",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "score": {
-                            "type": "integer",
-                            "description": "the score of the agent's answer",
-                        },
-                        "feedback": {
-                            "type": "string",
-                            "description": "in a few short words, provide feedback to the agent on their answer",
-                        },
-
-                    },
-                },
-            }
-        ],
-    )
-
-    
-    data = json.loads(response.choices[0].message.function_call.arguments)
-    
-
-    return {'reward': data.get("score"), 'feedback': data.get("feedback","No feedback")}
-
-
-
-
-
 
 #some examples
 
@@ -1326,6 +1273,3 @@ val = generate_text(examples[0]["start_state"])
 print(val)
 
 
-
-grade = evaluate_state(val,examples[0]["start_state"],examples[0]["solution"])
-print(grade)
